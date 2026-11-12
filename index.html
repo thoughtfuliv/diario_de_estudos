@@ -59,6 +59,29 @@ main{position:relative;z-index:1}
 @keyframes fly{0%{transform:translate(0,0) rotate(0);opacity:0}10%{opacity:.5}50%{transform:translate(34px,-55vh) rotate(24deg)}90%{opacity:.4}100%{transform:translate(-24px,-115vh) rotate(-16deg);opacity:0}}
 @media (prefers-reduced-motion:reduce){.fx{display:none}}
 .f{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--mut)}.f input,.f select,.f textarea{font-weight:400;font-size:15px;color:var(--fg);width:100%}.row>.f{flex:1 1 160px}
+
+#vw{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+#vw[hidden]{display:none}
+.vt{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;background:var(--card);border-bottom:1px solid var(--bd);box-shadow:var(--sh)}
+.vt button{padding:8px 12px;min-width:42px}
+.vt button.on{background:var(--ac);color:var(--acf);border-color:var(--ac)}
+.vn{max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp{flex:1 1 8px}
+.vb{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+.sw{width:30px;height:30px;min-width:30px!important;padding:0!important;border-radius:50%!important;border:2px solid var(--bd)}
+.sw.on{outline:3px solid var(--ac);outline-offset:1px}
+.vt input[type=number]{width:62px;padding:6px 8px}
+.vt input[type=range]{width:90px;padding:0}
+.vt label{display:inline-flex;gap:5px;align-items:center;font-size:13px;color:var(--mut)}
+#vs{flex:1;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:color-mix(in srgb,var(--bg) 70%,#000 8%)}
+#vp{position:relative;width:max-content;min-width:100%;padding:10px 0 40px}
+.pg{position:relative;margin:0 auto 12px;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.25)}
+.pg canvas{position:absolute;left:0;top:0;width:100%;height:100%;display:block}
+.pg .hl{mix-blend-mode:multiply;opacity:.45;pointer-events:none}
+.pg .ink{pointer-events:none;cursor:crosshair}
+.pg .ink.on{pointer-events:auto}
+#vw[data-tool="n"] .ink{touch-action:pan-x pan-y pinch-zoom;cursor:default}
+#vw:not([data-tool="n"]) .ink{touch-action:none}
 </style></head><body><div class="fx" id="fx" aria-hidden="true"></div><main>
 <div class="hd"><h1>👩🏻‍💻 Diário de Estudos · Bacen</h1><p id="sub"></p><button id="out" data-a="out" hidden style="margin-top:10px;background:rgba(255,255,255,.2);color:#fff;border:0">Sair</button></div>
 <div id="lg" class="card" hidden><h2>Entrar</h2><div class="row"><label class="f">E-mail<input id="em" type="email" autocomplete="username"></label><label class="f">Senha<input id="pw" type="password" autocomplete="current-password"></label></div>
@@ -67,7 +90,16 @@ main{position:relative;z-index:1}
 <details class="card"><summary>Backup dos dados</summary>
 <p class="mut">Seus dados ficam no Supabase. Para trazer dados de uma versão anterior, cole aqui o backup (texto gerado pelo botão Gerar backup da versão antiga) e clique em Importar.</p>
 <textarea id="bk"></textarea><div class="row"><button data-a="exp">Gerar backup</button><button data-a="imp">Importar</button></div></details></div>
+<div id="vw" hidden data-tool="p"><div class="vt"><button data-w="x" title="Fechar">←</button><b id="vn" class="vn"></b><span id="vst" class="mut"></span><span class="sp"></span>
+<span id="vb" class="vb"></span>
+<button data-w="undo" title="Desfazer">↶</button>
+<input id="vz" type="range" min="1" max="10" value="3" title="Espessura">
+<button data-w="z-">−</button><button data-w="z0" id="vzl">100%</button><button data-w="z+">+</button>
+<span class="mut">Pág.</span><input id="vpg" type="number" min="1" value="1"><span id="vpt" class="mut"></span>
+<label><input id="vfg" type="checkbox">dedo desenha</label></div>
+<div id="vs"><div id="vp"></div></div></div>
 </main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script>
 const SUPABASE_URL="https://ettxtwvsqapowicfefyw.supabase.co",SUPABASE_KEY="sb_publishable_mZycXCmHdcR_7ni1qJmrEA_tlIYezVb";
@@ -123,7 +155,7 @@ async function gate(){
  if(!sb){const l=document.getElementById("lg");l.hidden=false;l.innerHTML='<h2>Configuração pendente</h2><p class="mut">Preencha SUPABASE_URL e SUPABASE_KEY no início do script do index.html.</p>';return}
  const{data}=await sb.auth.getSession(),ok=!!data.session;
  document.getElementById("lg").hidden=ok;document.getElementById("ap").hidden=!ok;document.getElementById("out").hidden=!ok;
- if(ok){render();load()}}
+ if(ok){render();load();loadMats()}}
 async function auth(k){const m=document.getElementById("lm"),email=document.getElementById("em").value.trim(),password=document.getElementById("pw").value;
  if(!email||password.length<6){m.textContent="Informe e-mail e uma senha de pelo menos 6 caracteres.";return}
  m.textContent="";const r=k==="in"?await sb.auth.signInWithPassword({email,password}):await sb.auth.signUp({email,password});
@@ -217,21 +249,21 @@ function vD(){
  <div class="card" style="margin-top:14px"><h2>Evolução da taxa de acerto</h2>${accLine()}</div>`}
 function render(){
  $("#sub").textContent=new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long"});
- $("#nav").innerHTML=[["desemp","📊 Desempenho"],["horas","⏱ Horas"],["questoes","✅ Questões"],["edital","📋 Edital"],["cron","🗓 Cronograma"]].map(t=>`<button class="${tab===t[0]?"on":""}" data-tab="${t[0]}">${t[1]}</button>`).join("");
- $("#app").innerHTML={desemp:vD,horas:vHoras,questoes:vQ,edital:vEdital,cron:vCron}[tab]()}
+ $("#nav").innerHTML=[["desemp","📊 Desempenho"],["horas","⏱ Horas"],["questoes","✅ Questões"],["edital","📋 Edital"],["cron","🗓 Cronograma"],["mat","📚 Materiais"]].map(t=>`<button class="${tab===t[0]?"on":""}" data-tab="${t[0]}">${t[1]}</button>`).join("");
+ $("#app").innerHTML={desemp:vD,horas:vHoras,questoes:vQ,edital:vEdital,cron:vCron,mat:vMat}[tab]()}
 const g=id=>$("#"+id);
-document.addEventListener("toggle",e=>{const i=e.target.dataset&&e.target.dataset.i;if(i!==undefined&&i!=="")e.target.open?open.add(+i):open.delete(+i)},true);
+document.addEventListener("toggle",e=>{const i=e.target.dataset&&e.target.dataset.i;if(i!==undefined&&i!=="")e.target.open?open.add(+i):open.delete(+i);const m=e.target.dataset&&e.target.dataset.m;if(m!==undefined&&m!=="")e.target.open?openM.add(+m):openM.delete(+m)},true);
 document.addEventListener("change",async e=>{
  if(e.target.id==="dd"&&e.target.value){day=e.target.value;render()}
  else if(e.target.dataset.a==="chk"){const k=e.target.dataset.v,on=e.target.checked;if(await dbTopic(k,on))on?st.done[k]=1:delete st.done[k];const sc=scrollY;render();scrollTo(0,sc)}
- else if(e.target.id==="hs"||e.target.id==="qs")ls=+e.target.value;
+ else if(e.target.id==="hs"||e.target.id==="qs"||e.target.id==="ms")ls=+e.target.value;
  else if(e.target.id==="ht")lt=e.target.value});
 document.addEventListener("click",async e=>{
  const b=e.target.closest("button");if(!b)return;
  if(b.dataset.tab){tab=b.dataset.tab;render();return}
  const a=b.dataset.a,v=b.dataset.v;if(!a)return;
  if(a==="in"||a==="up"){await auth(a);return}
- if(a==="out"){await sb.auth.signOut();st={done:{},logs:[],qs:[]};gate();return}
+ if(a==="out"){await sb.auth.signOut();st={done:{},logs:[],qs:[]};MT=[];MTerr="";gate();return}
  if(a==="dm")day=addD(day,-1);else if(a==="dp")day=addD(day,1);
  else if(a==="per")per=v;else if(a==="qper")qper=v;else if(a==="dper")dper=v;
  else if(a==="wm")wk=Math.max(1,wk-1);else if(a==="wp")wk=Math.min(12,wk+1);
@@ -241,6 +273,11 @@ document.addEventListener("click",async e=>{
  else if(a==="addq"){const n=+g("qn").value||0,ac=+g("qa").value||0;if(n<=0||ac<0||ac>n){alert("Confira os números: acertos não podem passar de questões feitas.");return}
   day=g("qd").value||day;const w=await dbIns("questoes",{data:day,materia:+g("qs").value,conteudo:g("qc").value.trim(),feitas:n,acertos:ac,obs:g("qo").value.trim()});if(!w)return;st.qs.push({id:w.id,d:w.data,s:w.materia,c:w.conteudo||"",n:w.feitas,a:w.acertos,o:w.obs||""})}
  else if(a==="delq"){if(await dbDel("questoes",v))st.qs=st.qs.filter(q=>q.id!=v)}
+ else if(a==="mup"){await upMats()}
+ else if(a==="mopen"){openViewer(+v);return}
+ else if(a==="mdel"){const m=MT.find(x=>x.id==v);if(!m||!confirm('Excluir "'+m.n+'" e todas as anotações dele?'))return;
+  const{error}=await sb.storage.from("materiais").remove([m.p]);if(error){fail(error);return}
+  if(await dbDel("materiais",v))MT=MT.filter(x=>x.id!=v)}
  else if(a==="exp"){g("bk").value=JSON.stringify(st)}
  else if(a==="imp"){try{const o=JSON.parse(g("bk").value);if(!o||!Array.isArray(o.logs)||!Array.isArray(o.qs))throw 0;if(!confirm("Importar "+o.logs.length+" registros de horas, "+o.qs.length+" de questões e "+Object.keys(o.done||{}).length+" tópicos? Eles serão somados aos dados atuais."))return;
   const ins=async(t,rows)=>{if(!rows.length)return;const{error}=await sb.from(t).insert(rows);if(error)throw error};
@@ -252,5 +289,173 @@ document.addEventListener("click",async e=>{
 (function(){const f=$("#fx");for(let i=0;i<18;i++){const e=document.createElement("i"),k=true,s=k?12+Math.random()*20:8+Math.random()*16;
 e.className=k?"h":"d";if(k)e.textContent="♥";
 e.style.cssText=`left:${Math.random()*100}%;font-size:${s}px;${k?"":`width:${s}px;height:${s}px;`}animation-duration:${16+Math.random()*18}s;animation-delay:-${Math.random()*30}s`;f.appendChild(e)}})();
+/* ===== MATERIAIS: PDFs por matéria + anotações à caneta ===== */
+if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+let MT=[],MTerr="";const openM=new Set();
+const mb=b=>b>=1048576?(b/1048576).toFixed(1)+" MB":Math.max(1,Math.round(b/1024))+" KB";
+async function loadMats(){
+ try{const r=await all("materiais","id");MT=r.map(x=>({id:x.id,s:x.materia,n:x.nome,p:x.caminho,z:x.tamanho||0,d:x.criado_em}));MTerr=""}
+ catch(e){MTerr=(e&&e.message)||String(e)}
+ if(tab==="mat")render()}
+function vMat(){
+ if(MTerr)return`<div class="card"><h2>Materiais</h2><p class="mut">Para usar esta aba, rode o arquivo <b>supabase-materiais.sql</b> no SQL Editor do Supabase e recarregue a página.</p><p class="mut">${esc(MTerr)}</p></div>`;
+ const by=S.map(()=>[]);MT.forEach(m=>by[m.s]&&by[m.s].push(m));
+ return`<div class="card"><h2>Enviar PDFs</h2><div class="row" style="align-items:end"><label class="f">Matéria<select id="ms">${opts(S.map(s=>s[0]),ls)}</select></label><label class="f">Arquivos PDF<input id="mf" type="file" accept="application/pdf,.pdf" multiple></label><button class="pri" data-a="mup">Enviar</button></div>
+ <p id="mmsg" class="mut">Abra o PDF e escreva direto na página com a caneta do tablet. As anotações ficam salvas por página.</p></div>
+ <div class="card"><h2>Meus materiais · ${MT.length} arquivo${MT.length===1?"":"s"}</h2>${S.map((s,i)=>`<details data-m="${i}" ${openM.has(i)?"open":""}><summary>${esc(s[0])} <span class="mut">${by[i].length} PDF${by[i].length===1?"":"s"}</span></summary>${by[i].map(m=>`<div class="li"><span><b>${esc(m.n)}</b><br><span class="mut">${br(iso(new Date(m.d)))} · ${mb(m.z)}</span></span><span style="display:flex;gap:6px"><button class="pri" data-a="mopen" data-v="${m.id}" style="color:var(--acf);padding:7px 14px">Abrir</button><button data-a="mdel" data-v="${m.id}" style="padding:7px 12px">✕</button></span></div>`).join("")||'<p class="mut">Nenhum PDF nesta matéria.</p>'}</details>`).join("")}</div>`}
+async function upMats(){
+ const fs=[...g("mf").files],s=+g("ms").value,msg=g("mmsg");ls=s;
+ if(!fs.length){alert("Escolha um ou mais PDFs.");return}
+ const{data:u}=await sb.auth.getUser(),uid=u.user.id;
+ for(const f of fs){
+  if(!/\.pdf$/i.test(f.name)&&f.type!=="application/pdf"){alert('"'+f.name+'" não é PDF.');continue}
+  msg.textContent="Enviando "+f.name+"…";
+  const safe=f.name.normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w.\-]+/g,"_");
+  const path=uid+"/"+s+"/"+Date.now()+"-"+safe;
+  const{error}=await sb.storage.from("materiais").upload(path,f,{contentType:"application/pdf",upsert:false});
+  if(error){fail(error);continue}
+  const w=await dbIns("materiais",{materia:s,nome:f.name.replace(/\.pdf$/i,""),caminho:path,tamanho:f.size});
+  if(!w){await sb.storage.from("materiais").remove([path]);continue}
+  MT.push({id:w.id,s:w.materia,n:w.nome,p:w.caminho,z:w.tamanho||0,d:w.criado_em});openM.add(s)}}
+
+/* ---- leitor ---- */
+const VW={m:null,doc:null,P:[null],N:0,z:1,tool:"p",cp:"#1d1d1f",ch:"#fde047",sz:3,fg:false,cur:null,pan:null,U:[],D:new Set(),t:0,io:null,ra:0,raf:0};
+const COR_P=["#1d1d1f","#c93a3a","#1d4ed8","#2f9e6e","#7b5ea7","#e08a00"],COR_H=["#fde047","#f9a8d4","#86efac","#7dd3fc","#fdba74"];
+const setSt=t=>{g("vst").textContent=t};
+function bar(){
+ const T=[["n","✋","Navegar (rolar e dar zoom com os dedos)"],["p","✏️","Caneta"],["h","🖍","Marca-texto"],["e","🧽","Borracha"]];
+ const cs=VW.tool==="h"?COR_H:COR_P,cur=VW.tool==="h"?VW.ch:VW.cp;
+ g("vb").innerHTML=T.map(t=>`<button data-w="tool" data-v="${t[0]}" title="${t[2]}" class="${VW.tool===t[0]?"on":""}">${t[1]}</button>`).join("")+
+  (VW.tool==="p"||VW.tool==="h"?cs.map(c=>`<button class="sw ${c===cur?"on":""}" data-w="col" data-v="${c}" style="background:${c}" aria-label="Cor"></button>`).join(""):"")}
+function layout(){
+ const vs=g("vs"),base=Math.max(200,Math.min(vs.clientWidth-16,1000))*VW.z;
+ for(let n=1;n<=VW.N;n++){const P=VW.P[n];P.w=base;P.h=base*P.vh/P.vw;P.el.style.width=P.w+"px";P.el.style.height=P.h+"px"}
+ g("vzl").textContent=Math.round(VW.z*100)+"%"}
+function setZoom(z){
+ const vs=g("vs"),r=vs.scrollTop/(vs.scrollHeight||1);VW.z=Math.min(3,Math.max(.5,z));layout();vs.scrollTop=r*vs.scrollHeight;
+ for(let n=1;n<=VW.N;n++){const P=VW.P[n];if(P.vis)renderPage(n);else if(P.ok)release(n)}}
+function release(n){const P=VW.P[n];if(P.busy||!P.ok)return;for(const c of[P.c,P.hl,P.ink]){c.width=1;c.height=1}P.ok=false;P.ink.classList.remove("on")}
+async function renderPage(n){
+ const P=VW.P[n],doc=VW.doc;if(P.busy)return;P.busy=true;
+ try{while(P.vis){
+  const w=P.w,page=await doc.getPage(n);if(doc!==VW.doc)return;
+  const dpr=Math.min(window.devicePixelRatio||1,2),vp=page.getViewport({scale:w*dpr/P.vw});
+  P.c.width=Math.round(vp.width);P.c.height=Math.round(vp.height);
+  await page.render({canvasContext:P.c.getContext("2d"),viewport:vp}).promise;
+  if(doc!==VW.doc)return;
+  P.ok=true;P.ink.width=P.hl.width=P.c.width;P.ink.height=P.hl.height=P.c.height;P.ink.classList.add("on");drawPage(n);
+  if(P.w===w)break}}
+ catch(e){if(!(e&&e.name==="RenderingCancelledException"))console.error(e)}
+ finally{P.busy=false}
+ if(!P.vis&&P.ok&&doc===VW.doc)release(n)}
+function strokePath(ctx,s,k){
+ const p=s.p;ctx.lineCap=ctx.lineJoin="round";ctx.strokeStyle=ctx.fillStyle=s.c;ctx.lineWidth=s.w*k;
+ if(p.length===1){ctx.beginPath();ctx.arc(p[0][0]*k,p[0][1]*k,ctx.lineWidth/2,0,7);ctx.fill();return}
+ ctx.beginPath();ctx.moveTo(p[0][0]*k,p[0][1]*k);
+ for(let i=1;i<p.length-1;i++)ctx.quadraticCurveTo(p[i][0]*k,p[i][1]*k,(p[i][0]+p[i+1][0])/2*k,(p[i][1]+p[i+1][1])/2*k);
+ const l=p[p.length-1];ctx.lineTo(l[0]*k,l[1]*k);ctx.stroke()}
+function drawPage(n){
+ const P=VW.P[n];if(!P||!P.ok)return;const k=P.ink.width,a=P.ink.getContext("2d"),b=P.hl.getContext("2d");
+ a.clearRect(0,0,P.ink.width,P.ink.height);b.clearRect(0,0,P.hl.width,P.hl.height);
+ for(const s of P.S)strokePath(s.t==="h"?b:a,s,k)}
+function drawSeg(P,s,a,b){
+ const k=P.ink.width,ctx=(s.t==="h"?P.hl:P.ink).getContext("2d");
+ ctx.lineCap=ctx.lineJoin="round";ctx.strokeStyle=s.c;ctx.lineWidth=s.w*k;ctx.beginPath();ctx.moveTo(a[0]*k,a[1]*k);ctx.lineTo(b[0]*k,b[1]*k);ctx.stroke()}
+function dseg(q,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((q[0]-a[0])*dx+(q[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));return Math.hypot(q[0]-a[0]-t*dx,q[1]-a[1]-t*dy)}
+function hit(s,q,r){const p=s.p;if(p.length===1)return Math.hypot(p[0][0]-q[0],p[0][1]-q[1])<r;for(let i=1;i<p.length;i++)if(dseg(q,p[i-1],p[i])<r)return true;return false}
+function erase(C,q){
+ const P=VW.P[C.n],r=12/P.w,keep=[],gone=[];
+ for(const s of P.S)(hit(s,q,r+s.w/2)?gone:keep).push(s);
+ if(gone.length){P.S=keep;C.del.push(...gone);drawPage(C.n);dirty(C.n)}}
+const pos=(e,r)=>[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.width];
+function beginStroke(e,c){
+ const n=+c.dataset.n,P=VW.P[n];let t=VW.tool;if(e.pointerType==="pen"&&(e.buttons&32))t="e";
+ c.setPointerCapture(e.pointerId);
+ const C=VW.cur={id:e.pointerId,n,t,r:c.getBoundingClientRect(),s:null,del:[]},q=pos(e,C.r);
+ if(t==="e"){erase(C,q);return}
+ C.s={t,c:t==="h"?VW.ch:VW.cp,w:(t==="h"?VW.sz*5:VW.sz)/P.w,p:[q]};drawSeg(P,C.s,q,q)}
+function endStroke(e){
+ const C=VW.cur;if(!C||e.pointerId!==C.id)return;VW.cur=null;const P=VW.P[C.n];
+ if(C.s){C.s.p=C.s.p.map(q=>[+q[0].toFixed(4),+q[1].toFixed(4)]);P.S.push(C.s);VW.U.push({k:"a",n:C.n,s:C.s});drawPage(C.n);dirty(C.n)}
+ else if(C.del.length)VW.U.push({k:"d",n:C.n,list:C.del})}
+function undo(){
+ const u=VW.U.pop();if(!u)return;const P=VW.P[u.n];
+ if(u.k==="a"){const i=P.S.indexOf(u.s);if(i>=0)P.S.splice(i,1)}else P.S.push(...u.list);
+ drawPage(u.n);dirty(u.n)}
+function dirty(n){VW.D.add(n);setSt("Salvando…");clearTimeout(VW.t);VW.t=setTimeout(flush,900)}
+async function flush(){
+ clearTimeout(VW.t);if(!VW.D.size||!VW.m)return;
+ const ns=[...VW.D],id=VW.m.id;VW.D.clear();
+ const rows=ns.map(n=>({material_id:id,pagina:n,tracos:VW.P[n].S}));
+ const{error}=await sb.from("anotacoes").upsert(rows,{onConflict:"material_id,pagina"});
+ if(error){console.error(error);if(VW.m&&VW.m.id===id){ns.forEach(n=>VW.D.add(n));setSt("⚠ Não salvou, tentando de novo…");VW.t=setTimeout(flush,4000)}return}
+ if(VW.m&&VW.m.id===id&&!VW.D.size)setSt("Salvo ✓")}
+document.addEventListener("visibilitychange",()=>{if(document.hidden&&VW.m)flush()});
+async function openViewer(id){
+ const m=MT.find(x=>x.id==id);if(!m)return;
+ if(!window.pdfjsLib){alert("O leitor de PDF não carregou. Verifique a conexão e recarregue a página.");return}
+ const vw=g("vw");vw.hidden=false;g("vn").textContent=m.n;g("vp").innerHTML="";setSt("Baixando PDF…");
+ try{
+  const[dl,an]=await Promise.all([sb.storage.from("materiais").download(m.p),sb.from("anotacoes").select("pagina,tracos").eq("material_id",id).range(0,999)]);
+  if(dl.error)throw dl.error;if(an.error)throw an.error;
+  const doc=await pdfjsLib.getDocument({data:new Uint8Array(await dl.data.arrayBuffer())}).promise;
+  const ann={};an.data.forEach(r=>ann[r.pagina]=Array.isArray(r.tracos)?r.tracos:[]);
+  Object.assign(VW,{m,doc,N:doc.numPages,P:[null],U:[],D:new Set(),z:1,tool:"p",cur:null,pan:null});
+  vw.dataset.tool="p";g("vz").value=VW.sz;g("vpt").textContent="/ "+VW.N;g("vpg").max=VW.N;g("vpg").value=1;bar();
+  const fr=document.createDocumentFragment();
+  for(let n=1;n<=VW.N;n++){
+   const v=(await doc.getPage(n)).getViewport({scale:1}),el=document.createElement("div");
+   el.className="pg";el.dataset.n=n;el.innerHTML='<canvas class="pdf"></canvas><canvas class="hl"></canvas><canvas class="ink" data-n="'+n+'"></canvas>';
+   VW.P.push({n,el,c:el.children[0],hl:el.children[1],ink:el.children[2],vw:v.width,vh:v.height,S:ann[n]||[],ok:false,busy:false,vis:false,w:0,h:0});fr.appendChild(el)}
+  g("vp").appendChild(fr);layout();
+  if(VW.io)VW.io.disconnect();
+  VW.io=new IntersectionObserver(es=>es.forEach(en=>{const n=+en.target.dataset.n,P=VW.P[n];if(!P)return;P.vis=en.isIntersecting;if(P.vis)renderPage(n);else release(n)}),{root:g("vs"),rootMargin:"900px 0px"});
+  for(let n=1;n<=VW.N;n++)VW.io.observe(VW.P[n].el);
+  g("vs").scrollTop=0;setSt("Salvo ✓")}
+ catch(e){fail(e);vw.hidden=true;VW.m=null}}
+async function closeViewer(){
+ await flush();
+ if(VW.D.size&&!confirm("Algumas anotações ainda não foram salvas. Sair mesmo assim?"))return;
+ clearTimeout(VW.t);if(VW.io)VW.io.disconnect();try{VW.doc&&VW.doc.destroy()}catch(e){}
+ VW.m=null;VW.doc=null;VW.P=[null];VW.N=0;g("vp").innerHTML="";g("vw").hidden=true}
+(function(){
+ const vs=g("vs"),vw=g("vw");
+ vw.addEventListener("click",async e=>{
+  const b=e.target.closest("button");if(!b||!b.dataset.w)return;const w=b.dataset.w,v=b.dataset.v;
+  if(w==="x")await closeViewer();
+  else if(w==="tool"){VW.tool=v;vw.dataset.tool=v;bar()}
+  else if(w==="col"){if(VW.tool==="h")VW.ch=v;else VW.cp=v;bar()}
+  else if(w==="undo")undo();
+  else if(w==="z+")setZoom(VW.z+.25);else if(w==="z-")setZoom(VW.z-.25);else if(w==="z0")setZoom(1)});
+ g("vz").addEventListener("input",e=>{VW.sz=+e.target.value});
+ g("vfg").addEventListener("change",e=>{VW.fg=e.target.checked});
+ g("vpg").addEventListener("change",e=>{const n=Math.min(VW.N,Math.max(1,+e.target.value||1));if(VW.P[n])vs.scrollTop=VW.P[n].el.offsetTop-6});
+ vs.addEventListener("scroll",()=>{if(VW.ra)return;VW.ra=requestAnimationFrame(()=>{VW.ra=0;if(!VW.N)return;
+  const mid=vs.scrollTop+vs.clientHeight/3;let c=1;for(let n=1;n<=VW.N;n++){if(VW.P[n].el.offsetTop<=mid)c=n;else break}
+  const i=g("vpg");if(document.activeElement!==i)i.value=c})});
+ vs.addEventListener("pointerdown",e=>{
+  const c=e.target.closest&&e.target.closest("canvas.ink");if(!c||VW.tool==="n"||VW.cur)return;
+  if(e.pointerType==="touch"&&!VW.fg){VW.pan={id:e.pointerId,x:e.clientX,y:e.clientY,t:e.timeStamp,vx:0,vy:0};cancelAnimationFrame(VW.raf);c.setPointerCapture(e.pointerId);return}
+  if(e.pointerType==="mouse"&&e.button!==0)return;
+  e.preventDefault();beginStroke(e,c)});
+ vs.addEventListener("pointermove",e=>{
+  const C=VW.cur;
+  if(C&&e.pointerId===C.id){e.preventDefault();const P=VW.P[C.n],evs=e.getCoalescedEvents?e.getCoalescedEvents():[];
+   for(const ev of(evs.length?evs:[e])){const q=pos(ev,C.r);
+    if(C.t==="e")erase(C,q);
+    else{const l=C.s.p[C.s.p.length-1];if(Math.hypot(q[0]-l[0],q[1]-l[1])*P.w<.8)continue;C.s.p.push(q);drawSeg(P,C.s,l,q)}}
+   return}
+  const A=VW.pan;
+  if(A&&e.pointerId===A.id){const dx=e.clientX-A.x,dy=e.clientY-A.y,dt=Math.max(1,e.timeStamp-A.t);
+   A.vx=dx/dt;A.vy=dy/dt;vs.scrollLeft-=dx;vs.scrollTop-=dy;A.x=e.clientX;A.y=e.clientY;A.t=e.timeStamp}});
+ const up=e=>{
+  endStroke(e);
+  const A=VW.pan;if(A&&e.pointerId===A.id){VW.pan=null;
+   let vx=e.timeStamp-A.t>80?0:A.vx*16,vy=e.timeStamp-A.t>80?0:A.vy*16;
+   const step=()=>{vs.scrollTop-=vy;vs.scrollLeft-=vx;vx*=.95;vy*=.95;if(Math.hypot(vx,vy)>.5)VW.raf=requestAnimationFrame(step)};
+   if(Math.hypot(vx,vy)>.5)VW.raf=requestAnimationFrame(step)}};
+ vs.addEventListener("pointerup",up);vs.addEventListener("pointercancel",up);
+})();
+
 gate();
 </script></body></html>
