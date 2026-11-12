@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""Estudos Bacen: app local com banco SQLite.
+
+Uso:  python bacen_estudos.py
+Abre http://127.0.0.1:8000 no navegador. Só usa a biblioteca padrão do Python (3.8+).
+Os dados ficam em estudos_bacen.db, na mesma pasta do script.
+Variáveis opcionais: PORT (padrão 8000).
+"""
+import json
+import os
+import sqlite3
+import threading
+import webbrowser
+from contextlib import closing
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "estudos_bacen.db")
+PORT = int(os.environ.get("PORT", "8000"))
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS topicos_feitos (chave TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS horas (
+    id INTEGER PRIMARY KEY, data TEXT NOT NULL, materia INTEGER NOT NULL,
+    tipo TEXT NOT NULL, minutos INTEGER NOT NULL CHECK (minutos > 0));
+CREATE TABLE IF NOT EXISTS questoes (
+    id INTEGER PRIMARY KEY, data TEXT NOT NULL, materia INTEGER NOT NULL,
+    conteudo TEXT, feitas INTEGER NOT NULL CHECK (feitas > 0),
+    acertos INTEGER NOT NULL CHECK (acertos >= 0 AND acertos <= feitas), obs TEXT);
+CREATE INDEX IF NOT EXISTS ix_horas_data ON horas(data);
+CREATE INDEX IF NOT EXISTS ix_questoes_data ON questoes(data);
+"""
+
+
+def db():
+    c = sqlite3.connect(DB)
+    c.row_factory = sqlite3.Row
+    return c
+
+
+def init():
+    with closing(db()) as c:
+        c.executescript(SCHEMA)
+        c.commit()
+
+
+def get_state():
+    with closing(db()) as c:
+        done = {r["chave"]: 1 for r in c.execute("SELECT chave FROM topicos_feitos")}
+        logs = [dict(id=r["id"], d=r["data"], s=r["materia"], t=r["tipo"], m=r["minutos"])
+                for r in c.execute("SELECT * FROM horas ORDER BY data, id")]
+        qs = [dict(id=r["id"], d=r["data"], s=r["materia"], c=r["conteudo"] or "",
+                   n=r["feitas"], a=r["acertos"], o=r["obs"] or "")
+              for r in c.execute("SELECT * FROM questoes ORDER BY data, id")]
+    return {"done": done, "logs": logs, "qs": qs}
+
+
+def set_state(o):
+    done = [str(k) for k in o.get("done", {})]
+    logs = [(int(l["id"]), str(l["d"]), int(l["s"]), str(l["t"]), int(l["m"])) for l in o.get("logs", [])]
+    qs = [(int(q["id"]), str(q["d"]), int(q["s"]), str(q.get("c", "")), int(q["n"]), int(q["a"]), str(q.get("o", "")))
+          for q in o.get("qs", [])]
+    with closing(db()) as c:
+        with c:  # transação: ou grava tudo ou nada
+            c.execute("DELETE FROM topicos_feitos")
+            c.execute("DELETE FROM horas")
+            c.execute("DELETE FROM questoes")
+            c.executemany("INSERT INTO topicos_feitos VALUES (?)", [(k,) for k in done])
+            c.executemany("INSERT INTO horas VALUES (?,?,?,?,?)", logs)
+            c.executemany("INSERT INTO questoes VALUES (?,?,?,?,?,?,?)", qs)
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html"):
+            self._send(200, HTML.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path == "/api/state":
+            self._send(200, json.dumps(get_state()).encode(), "application/json")
+        else:
+            self._send(404, b"nao encontrado", "text/plain; charset=utf-8")
+
+    def do_POST(self):
+        if self.path != "/api/state":
+            return self._send(404, b"nao encontrado", "text/plain; charset=utf-8")
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+            if n > 5_000_000:
+                raise ValueError("corpo grande demais")
+            set_state(json.loads(self.rfile.read(n)))
+            self._send(200, b'{"ok":true}', "application/json")
+        except (ValueError, KeyError, TypeError, sqlite3.Error) as e:
+            self._send(400, json.dumps({"erro": str(e)}).encode(), "application/json")
+
+    def log_message(self, *a):
+        pass
+
+
+HTML = r"""<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Estudos Bacen</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#fbf1f3;--fg:#3a2128;--mut:#8a6a72;--card:#fff;--bd:#f1dce1;--ac:#b8475f;--acf:#fff;--ok:#2f9e6e;--bad:#c93a3a;--sh:0 1px 2px rgba(90,30,50,.06),0 8px 24px rgba(90,30,50,.09)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#1d1216;--fg:#f6e8eb;--mut:#b99aa2;--card:#2a1a20;--bd:#43292f;--ac:#e08a9f;--acf:#2a1218;--ok:#3ddc97;--bad:#ff7b80;--sh:none}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#1d1216;--fg:#f6e8eb;--mut:#b99aa2;--card:#2a1a20;--bd:#43292f;--ac:#e08a9f;--acf:#2a1218;--ok:#3ddc97;--bad:#ff7b80;--sh:none}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:14px 14px 60px}
+.hd{background:linear-gradient(135deg,#a63a55,#c4546c 55%,#e08f7a);color:#fff;border-radius:20px;padding:20px 22px;margin-bottom:14px;box-shadow:var(--sh)}
+.hd h1{margin:0;font-size:22px;letter-spacing:-.3px}.hd p{margin:2px 0 0;opacity:.85;font-size:14px}
+h2{font-size:16px;margin:0 0 10px;letter-spacing:-.2px}
+nav{position:sticky;top:8px;z-index:5;display:flex;gap:4px;overflow-x:auto;margin-bottom:14px;padding:5px;background:color-mix(in srgb,var(--card) 88%,transparent);backdrop-filter:blur(10px);border:1px solid var(--bd);border-radius:16px;box-shadow:var(--sh)}
+nav button{flex:1;white-space:nowrap;background:transparent;border:0;color:var(--mut);font-weight:600;padding:9px 12px;border-radius:12px}
+nav button.on{background:var(--ac);color:var(--acf)}
+button,select,input,textarea{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 11px}
+input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(--ac) 45%,transparent);border-color:var(--ac)}
+button{cursor:pointer;transition:.15s}button:hover{border-color:var(--ac)}
+button.pri{background:var(--ac);color:var(--acf);border-color:var(--ac);font-weight:600}
+.seg{display:inline-flex;gap:2px;margin:2px 0 12px;padding:3px;background:var(--bg);border:1px solid var(--bd);border-radius:12px}
+.seg button{border:0;background:transparent;color:var(--mut);padding:6px 14px;border-radius:9px}
+.seg button.on{background:var(--card);color:var(--fg);font-weight:600;box-shadow:var(--sh)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:18px;padding:16px;margin-bottom:14px;box-shadow:var(--sh)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row>*{flex:1 1 120px;min-width:0}
+.mut{color:var(--mut);font-size:13px}
+.bar{height:10px;background:var(--bg);border-radius:8px;overflow:hidden;margin:4px 0 8px}
+.bar i{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,var(--ac),#eaa6ad)}
+.big{font-size:32px;font-weight:700;letter-spacing:-1px;line-height:1.2}
+.grid,.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;align-items:start}
+.g2 .card{margin:0}
+.kp{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.k{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:14px;box-shadow:var(--sh)}
+.k .ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:color-mix(in srgb,var(--ac) 14%,transparent);margin-bottom:8px}
+.k b{font-size:26px;display:block;letter-spacing:-.8px;line-height:1.1}.k small{color:var(--mut)}
+.pie{position:relative;width:170px;height:170px;border-radius:50%;margin:4px auto;flex:none}
+.pie::after{content:"";position:absolute;inset:24%;background:var(--card);border-radius:50%}
+.pie b{position:absolute;inset:0;display:grid;place-items:center;z-index:1;font-size:17px}
+.dn{display:grid;gap:12px}
+.leg{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid var(--bd)}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:7px}
+.li{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--bd)}
+.li button{flex:none;padding:2px 9px;color:var(--bad)}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:560px}
+td,th{border-bottom:1px solid var(--bd);padding:9px 8px;text-align:left;vertical-align:top;font-size:13px}
+th{color:var(--mut);font-weight:600}
+tr.hoje td{background:color-mix(in srgb,var(--ac) 12%,transparent)}
+details{border-top:1px solid var(--bd);padding:10px 0}summary{cursor:pointer;font-weight:600}
+label.t{display:flex;gap:8px;padding:4px 0}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+textarea{width:100%;min-height:90px}
+main{position:relative;z-index:1}
+.fx{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
+.fx i{position:absolute;bottom:-50px;font-style:normal;line-height:1;animation:fly linear infinite;opacity:0}
+.fx .h{background:linear-gradient(135deg,#eaa6ad,#b8475f);-webkit-background-clip:text;background-clip:text;color:transparent}
+.fx .d{border-radius:50%;background:radial-gradient(circle at 30% 30%,rgba(255,255,255,.85),#eaa6ad 45%,#b8475f)}
+@keyframes fly{0%{transform:translate(0,0) rotate(0);opacity:0}10%{opacity:.5}50%{transform:translate(34px,-55vh) rotate(24deg)}90%{opacity:.4}100%{transform:translate(-24px,-115vh) rotate(-16deg);opacity:0}}
+@media (prefers-reduced-motion:reduce){.fx{display:none}}
+</style></head><body><div class="fx" id="fx" aria-hidden="true"></div><main>
+<div class="hd"><h1>👩🏻‍💻 Diário de Estudos · Bacen</h1><p id="sub"></p></div>
+<nav id="nav"></nav><div id="app"></div>
+<details class="card"><summary>Backup dos dados</summary>
+<p class="mut">Seus dados ficam no arquivo estudos_bacen.db, ao lado do script. Copiar esse arquivo já é um backup; o texto abaixo é uma alternativa.</p>
+<textarea id="bk"></textarea><div class="row"><button data-a="exp">Gerar backup</button><button data-a="imp">Restaurar</button></div></details>
+</main>
+<script>
+const K="bacen-estudos-v1";
+const S=[
+["Língua Portuguesa",25,["Interpretação de textos","Tipos e gêneros textuais","Ortografia oficial","Coesão textual e tempos verbais","Classes de palavras","Coordenação e subordinação","Pontuação","Concordância verbal e nominal","Regência e crase","Colocação pronominal","Reescrita de frases e parágrafos"]],
+["Lógica e Estatística",10,["Estruturas lógicas e argumentação","Lógica proposicional e tabelas-verdade","Equivalências e Leis de Morgan","População e amostra","Histogramas e curvas de frequência","Medidas de posição","Medidas de dispersão","Probabilidade condicional e independência","Variável aleatória e distribuições"]],
+["Direito Administrativo",5,["Princípios e administração direta e indireta","Poderes administrativos","Organização administrativa e serviços públicos","Ato administrativo","Lei 8.112/1990","Improbidade administrativa","Decreto 1.171/1994 (Código de Ética)","Código de Conduta da Alta Administração","Lei 11.813/2013 (conflito de interesses)","Lei 12.527/2011 (LAI)","Lei 13.709/2018 (LGPD)"]],
+["Macro e Microeconomia",10,["Contas nacionais","Agregados monetários","Multiplicador monetário","Contas do sistema monetário","Balanço de pagamentos","Estrutura de mercado e custo de oportunidade","Curvas de indiferença e restrição orçamentária","Equilíbrio do consumidor e efeitos preço, renda e substituição","Curva de demanda e elasticidade"]],
+["Atualidades (discursiva)",0,["Segurança e transportes","Política e economia","Sociedade, educação e saúde","Cultura e tecnologia","Energia e relações internacionais","Desenvolvimento sustentável e ecologia"]],
+["Ciência de Dados",14,["Aprendizado de máquina","Tipos de aprendizado","Redes neurais","Deep learning","Processamento de linguagem natural","LLMs e IA generativa","MLOps","Big data","Qualidade de dados","Governança e ética na IA"]],
+["Segurança da Informação",7,["IAM, SSO, SAML, OAuth2, OpenID Connect","MFA","Ataques e vulnerabilidades","Controles e testes em aplicações web","Firewall, IDS/IPS, SIEM, proxy, PAM","MITRE ATT&CK, CIS Controls, NIST CSF","Tratamento de incidentes","Criptografia, assinatura e certificação digital","Segurança em nuvem e contêineres","Privacidade e segurança por padrão"]],
+["Engenharia de Software",24,["Arquitetura de sistemas web","DevOps, DevSecOps e CI/CD","Desenvolvimento seguro","Testes (unitário, integração, TDD, BDD)","Arquiteturas (camadas, microsserviços, eventos, serverless)","UX e UI","Programação assíncrona","REST e GraphQL","Web services","Padrões GoF e GRASP","Git","Python e Java","Transações distribuídas","DLT"]],
+["Infraestrutura em TI",17,["Infraestrutura como código (Ansible, Puppet)","Docker e Kubernetes","Windows Server (DNS, DHCP, Radius, AD)","Monitoração e observabilidade","Protocolos de aplicação (SMTP, HTTPS, LDAP, NFS, SMB)","Tolerância a falhas e continuidade","Nuvem (IaaS, PaaS, SaaS)","Virtualização","Linux e Windows Server","LAN, WAN e SDN"]],
+["Bancos de Dados",4,["SGBDs SQL e NoSQL","Modelagem relacional, multidimensional e NoSQL","SQL","DataWarehouse, DataMart, DataLake, DataMesh"]],
+["Gestão em TI",4,["Kanban","Scrum","Governança de Dados","ITIL v4"]]
+];
+const W={
+"Engenharia de Software":["1-2|Arquitetura web (HTTP, gRPC, WebSockets, TLS, proxy, cache, DNS)","3-4|DevOps, DevSecOps, CI/CD, desenvolvimento seguro","5-6|Testes e arquiteturas","7-8|REST, GraphQL, web services, assíncrona, transações distribuídas","9-10|GoF, GRASP, Git, Python e Java","11|UX/UI e DLT","12|Revisão"],
+"Ciência de Dados":["1-3|Machine Learning e tipos de aprendizado","4-5|Redes neurais e deep learning","6-7|PLN","8-9|LLMs e IA generativa","10|MLOps","11|Big Data e qualidade de dados","12|Governança e ética na IA"],
+"Infraestrutura em TI":["1-2|IaC, Ansible e Puppet","3-4|Docker e Kubernetes","5-6|Windows Server","7|Linux e virtualização","8-9|Monitoramento e observabilidade","10|Protocolos de aplicação","11|Nuvem, LAN, WAN e SDN","12|Tolerância a falhas e revisão"],
+"Língua Portuguesa":["1-2|Interpretação, tipos e gêneros","3|Ortografia e coesão","4-5|Classes de palavras, coordenação e subordinação","6|Pontuação","7|Concordância","8|Regência e crase","9|Colocação pronominal","10-11|Reescrita","12|Revisão e primeiros textos discursivos"],
+"Lógica e Estatística":["1-4|Lógica proposicional e argumentação","5-8|Estatística descritiva","9-11|Probabilidade, variável aleatória e distribuições","12|Revisão"],
+"Segurança da Informação":["1-2|IAM, SSO, SAML, OAuth2, OIDC, MFA","3-4|Ataques, vulnerabilidades e testes web","5-6|Firewall, IDS/IPS, SIEM, proxy, PAM","7-8|MITRE, CIS, NIST CSF, incidentes","9-10|Criptografia e certificação digital","11|Nuvem e contêineres","12|Privacidade por padrão e revisão"],
+"Macro e Microeconomia":["1-5|Contas nacionais, moeda, multiplicador, BP","6-11|Mercado, oferta e demanda, consumidor, elasticidade","12|Revisão"],
+"Direito Administrativo":["1-3|Princípios, administração e poderes","4-5|Organização e ato administrativo","6-9|Lei 8.112/1990","10|Improbidade","11|Decreto 1.171, conduta, conflito de interesses","12|LAI e LGPD"],
+"Gestão em TI":["1-8|Kanban, Scrum, Governança de Dados, ITIL v4"],
+"Bancos de Dados":["9-12|SGBDs, modelagem, SQL, DW/DataMart/DataLake/DataMesh (revisão rápida)"],
+"Atualidades (discursiva)":["1-12|Um tema por semana: ler notícias e escrever resumo de 10 linhas"]
+};
+const GRID=[["Seg","Eng. Software (1h30)","Português (1h30)"],["Ter","Ciência de Dados (1h30)","Lógica e Estatística (1h) + Atualidades (30min)"],["Qua","Infra TI (1h30)","Português (1h30)"],["Qui","Eng. Software (1h30)","Macro/Microeconomia (1h30)"],["Sex","Ciência de Dados (1h30)","Segurança da Informação (1h30)"],["Sáb","Infra TI (1h30)","Lógica e Estatística (1h) + Direito Adm. (30min)"],["Dom","Direito Adm. (1h)","Gestão de TI / Bancos de Dados (1h) + revisão da semana (1h)"]];
+const TYPES={"Leitura (apostila/livro)":"#7dd3d8","Exercício":"#f3e98a","Revisão":"#fbc4ae","Resumo":"#c9b6f2","Videoaula":"#a8d8a0","Simulado":"#f2a7b8"};
+const START="2026-11-10",META=180;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const iso=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+const pd=s=>new Date(s+"T00:00");
+const addD=(s,n)=>{const d=pd(s);d.setDate(d.getDate()+n);return iso(d)};
+const br=s=>s.split("-").reverse().join("/");
+const fm=m=>Math.floor(m/60)+"h "+String(m%60).padStart(2,"0")+"m";
+const pct=(a,b)=>b?Math.round(a/b*100):0;
+let st={done:{},logs:[],qs:[]};
+const load=()=>fetch("/api/state").then(r=>r.json()).then(o=>{st=Object.assign(st,o);render()}).catch(()=>alert("Não consegui ler o banco de dados."));
+const save=()=>fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(st)}).then(r=>{if(!r.ok)throw 0}).catch(()=>alert("Falha ao salvar no banco de dados."));
+const today=iso(new Date());
+let dper="semana",tab="horas",day=today,per="dia",qper="total",open=new Set(),ls=0,lt=Object.keys(TYPES)[0];
+const wkNow=Math.floor((pd(today)-pd(START))/6048e5)+1;
+let wk=Math.min(Math.max(wkNow,1),12);
+function rng(p,d){
+ if(p==="dia")return[d,d];
+ if(p==="semana"){const x=pd(d);const off=(x.getDay()+6)%7;return[addD(d,-off),addD(d,6-off)]}
+ if(p==="mês"){const x=pd(d);return[iso(new Date(x.getFullYear(),x.getMonth(),1)),iso(new Date(x.getFullYear(),x.getMonth()+1,0))]}
+ return["0000-00-00","9999-99-99"]}
+const inR=(x,r)=>x>=r[0]&&x<=r[1];
+const segs=(cur,key)=>`<div class="seg">${["dia","semana","mês","total"].filter(p=>key==="per"||p!=="dia").map(p=>`<button class="${cur===p?"on":""}" data-a="${key}" data-v="${p}">${p[0].toUpperCase()+p.slice(1)}</button>`).join("")}</div>`;
+const opts=(arr,sel)=>arr.map((x,i)=>`<option value="${i}" ${i==sel?"selected":""}>${esc(x)}</option>`).join("");
+
+function vHoras(){
+ const dl=st.logs.filter(l=>l.d===day),tot=dl.reduce((a,l)=>a+l.m,0);
+ const r=rng(per,day),pl=st.logs.filter(l=>inR(l.d,r)),pt=pl.reduce((a,l)=>a+l.m,0);
+ const bt={},bs={};pl.forEach(l=>{bt[l.t]=(bt[l.t]||0)+l.m;bs[l.s]=(bs[l.s]||0)+l.m});
+ let acc=0;const stops=Object.keys(bt).map(t=>{const a=acc/pt*100;acc+=bt[t];return`${TYPES[t]||"#ccc"} ${a}% ${acc/pt*100}%`});
+ return`<div class="card"><div class="row"><button data-a="dm">‹</button><input type="date" id="dd" value="${day}"><button data-a="dp">›</button></div>
+ <div class="big">${fm(tot)} <span class="mut">de ${fm(META)}</span></div><div class="bar"><i style="width:${Math.min(100,pct(tot,META))}%"></i></div>
+ <div class="row" style="margin-top:10px"><select id="hs">${opts(S.map(s=>s[0]),ls)}</select><select id="ht">${Object.keys(TYPES).map(t=>`<option ${t===lt?"selected":""}>${t}</option>`).join("")}</select>
+ <input id="hh" type="number" min="0" placeholder="horas" value="1"><input id="hm" type="number" min="0" max="59" placeholder="min" value="0"><button class="pri" data-a="addl">Registrar</button></div>
+ ${dl.map(l=>`<div class="li"><span>${esc(S[l.s][0])} · ${esc(l.t)}</span><span>${fm(l.m)} <button data-a="dell" data-v="${l.id}">✕</button></span></div>`).join("")||'<p class="mut">Nenhum registro neste dia.</p>'}</div>
+ <div class="card"><h2>Resumo</h2>${segs(per,"per")}<div class="mut">${per==="total"?"Todo o período":br(r[0])+(r[0]!==r[1]?" a "+br(r[1]):"")}</div>
+ <div class="big">${fm(pt)}</div>${pt?`<div class="grid"><div class="pie" style="background:conic-gradient(${stops.join(",")})"></div><div>${Object.keys(bt).map(t=>`<div class="leg"><span><i class="dot" style="background:${TYPES[t]||"#ccc"}"></i>${esc(t)}</span><b>${fm(bt[t])} (${pct(bt[t],pt)}%)</b></div>`).join("")}</div></div>
+ <h2 style="margin-top:14px">Por matéria</h2>${Object.keys(bs).sort((a,b)=>bs[b]-bs[a]).map(s=>`<div class="leg"><span>${esc(S[s][0])}</span><b>${fm(bs[s])}</b></div><div class="bar"><i style="width:${pct(bs[s],pt)}%"></i></div>`).join("")}`:'<p class="mut">Sem horas neste período.</p>'}</div>`}
+
+function vEdital(){
+ let all=0,dn=0;S.forEach((s,i)=>s[2].forEach((t,j)=>{all++;if(st.done[i+"|"+j])dn++}));
+ return`<div class="card"><h2>Edital · ${dn} de ${all} tópicos (${pct(dn,all)}%)</h2><div class="bar"><i style="width:${pct(dn,all)}%"></i></div>
+ <p class="mut">Marque os tópicos já estudados. Provas objetivas: 120 questões; Atualidades só na discursiva.</p></div>
+ <div class="card">${S.map((s,i)=>{const d=s[2].filter((t,j)=>st.done[i+"|"+j]).length;
+ return`<details data-i="${i}" ${open.has(i)?"open":""}><summary>${esc(s[0])} <span class="mut">${s[1]?s[1]+" questões · ":""}${d}/${s[2].length}</span></summary>
+ <div class="bar" style="margin:6px 0"><i style="width:${pct(d,s[2].length)}%"></i></div>
+ ${s[2].map((t,j)=>`<label class="t"><input type="checkbox" data-a="chk" data-v="${i}|${j}" ${st.done[i+"|"+j]?"checked":""}>${esc(t)}</label>`).join("")}</details>`}).join("")}</div>`}
+
+function vCron(){
+ const dow=(pd(today).getDay()+6)%7;
+ const rows=S.map(s=>{const l=W[s[0]]||[];const f=l.find(x=>{const[r]=x.split("|");const[a,b]=r.split("-").map(Number);return wk>=a&&wk<=(b||a)});return f?`<div class="li"><b>${esc(s[0])}</b><span style="text-align:right">${esc(f.split("|")[1])}</span></div>`:""}).join("");
+ const ws=addD(START,(wk-1)*7);
+ return`<div class="card"><h2>Fase 1 · Semana ${wk} de 12</h2><div class="row"><button data-a="wm">‹</button><span class="mut" style="text-align:center">${br(ws)} a ${br(addD(ws,6))}${wk===wkNow?" · semana atual":""}</span><button data-a="wp">›</button></div>${rows}</div>
+ <div class="card"><h2>Semana padrão (3h por dia)</h2><p class="mut">Reserve os últimos 20 min de cada bloco para questões do tema.</p><div class="tw"><table><tr><th>Dia</th><th>Bloco 1</th><th>Bloco 2</th></tr>${GRID.map((g,i)=>`<tr class="${i===dow?"hoje":""}"><td><b>${g[0]}</b></td><td>${g[1]}</td><td>${g[2]}</td></tr>`).join("")}</table></div></div>
+ <div class="card"><h2>Fases</h2><div class="li"><span><b>1. Base</b> · 10/11 a 01/02</span><span>Teoria, 1º ciclo</span></div><div class="li"><span><b>2. Consolidação</b> · 02/02 a 15/03</span><span>Resumos e questões (30min + 1h); 1 texto discursivo por semana</span></div><div class="li"><span><b>3. Reta final</b> · 16/03 em diante</span><span>Sábado: simulado de 120; domingo: correção e caderno de erros; 2 redações por semana</span></div>
+ <p class="mut">Se perder uma semana, não recupere: empurre o tópico para a semana de revisão. Quando o edital sair, compare e ajuste.</p></div>`}
+
+function vQ(){
+ const r=rng(qper,day),ql=st.qs.filter(q=>inR(q.d,r)),f=ql.reduce((a,q)=>a+q.n,0),a=ql.reduce((x,q)=>x+q.a,0);
+ const bs={};ql.forEach(q=>{const o=bs[q.s]||(bs[q.s]={n:0,a:0});o.n+=q.n;o.a+=q.a});
+ return`<div class="card"><h2>Registrar questões</h2><div class="row"><input type="date" id="qd" value="${day}"><select id="qs">${opts(S.map(s=>s[0]),ls)}</select></div>
+ <div class="row" style="margin-top:8px"><input id="qc" placeholder="Conteúdo (ex.: crase, TCP/IP)"><input id="qn" type="number" min="1" placeholder="Feitas"><input id="qa" type="number" min="0" placeholder="Acertos"></div>
+ <textarea id="qo" placeholder="Anotação sobre os erros (opcional)" style="margin-top:8px;min-height:50px"></textarea><button class="pri" data-a="addq" style="margin-top:8px">Salvar</button></div>
+ <div class="card"><h2>Desempenho</h2>${segs(qper,"qper")}<div class="big">${pct(a,f)}% <span class="mut">${a} acertos · ${f-a} erros · ${f} questões</span></div>
+ ${Object.keys(bs).sort((x,y)=>pct(bs[x].a,bs[x].n)-pct(bs[y].a,bs[y].n)).map(s=>{const o=bs[s],p=pct(o.a,o.n);return`<div class="leg"><span>${esc(S[s][0])}</span><b class="${p>=70?"ok":p<50?"bad":""}">${p}% <span class="mut">(${o.a}/${o.n})</span></b></div><div class="bar"><i style="width:${p}%"></i></div>`}).join("")||'<p class="mut">Nenhuma questão neste período.</p>'}
+ <p class="mut">Ordenado do ponto mais fraco para o mais forte.</p></div>
+ <div class="card"><h2>Registros</h2>${ql.slice().sort((x,y)=>y.d.localeCompare(x.d)||y.id-x.id).map(q=>`<div class="li"><span><b>${esc(S[q.s][0])}</b> · ${esc(q.c)||"geral"}<br><span class="mut">${br(q.d)} · ${q.a}/${q.n} (${pct(q.a,q.n)}%)${q.o?" · "+esc(q.o):""}</span></span><button data-a="delq" data-v="${q.id}">✕</button></div>`).join("")||'<p class="mut">Sem registros.</p>'}</div>`}
+
+const PAL=["#b8475f","#f0a36b","#7b5ea7","#4fa08b","#e57fa0","#d9b44a","#5c7fb8","#9c3f58","#e07a5f","#8fae6b","#c28aa8"];
+const PLAN=[180,120,90,90,30,180,90,180,180,30,30];
+function donut(it,c){const t=it.reduce((a,x)=>a+x.v,0);if(!t)return'<p class="mut">Sem dados no período.</p>';let a=0;
+ const g=it.map(x=>{const s=a/t*100;a+=x.v;return x.c+" "+s+"% "+a/t*100+"%"});
+ return`<div class="dn"><div class="pie" style="background:conic-gradient(${g.join(",")})"><b>${c}</b></div><div>${it.map(x=>`<div class="leg"><span><i class="dot" style="background:${x.c}"></i>${esc(x.l)}</span><b>${fm(x.v)} · ${pct(x.v,t)}%</b></div>`).join("")}</div></div>`}
+function dayBars(){const ds=[];for(let i=13;i>=0;i--){const d=addD(today,-i);ds.push([d,st.logs.filter(l=>l.d===d).reduce((a,l)=>a+l.m,0)])}
+ const mx=Math.max(META,...ds.map(x=>x[1])),W=560,H=170,bw=W/14,my=H-META/mx*H;
+ return`<svg viewBox="0 0 ${W} ${H+24}" width="100%" role="img" aria-label="Horas por dia"><line x1="0" x2="${W}" y1="${my}" y2="${my}" stroke="var(--mut)" stroke-dasharray="4 4"/><text x="${W}" y="${my-4}" text-anchor="end" font-size="11" fill="var(--mut)">meta 3h</text>${ds.map((x,i)=>{const h=x[1]/mx*H;return`<rect x="${i*bw+6}" y="${H-h}" width="${bw-12}" height="${h}" rx="5" fill="${x[1]>=META?"var(--ok)":"var(--ac)"}"><title>${br(x[0])}: ${fm(x[1])}</title></rect><text x="${i*bw+bw/2}" y="${H+16}" text-anchor="middle" font-size="11" fill="var(--mut)">${x[0].slice(8)}</text>`}).join("")}</svg>`}
+function accLine(){const m={};st.qs.forEach(q=>{const o=m[q.d]||(m[q.d]={n:0,a:0});o.n+=q.n;o.a+=q.a});const ds=Object.keys(m).sort().slice(-20);
+ if(ds.length<2)return'<p class="mut">Registre questões em 2 dias ou mais para ver a evolução.</p>';
+ const W=560,H=150,p=ds.map((d,i)=>[10+i/(ds.length-1)*(W-20),H+5-pct(m[d].a,m[d].n)/100*H]),y7=H+5-.7*H;
+ return`<svg viewBox="0 0 ${W} ${H+30}" width="100%" role="img" aria-label="Evolução da taxa de acerto"><line x1="0" x2="${W}" y1="${y7}" y2="${y7}" stroke="var(--mut)" stroke-dasharray="4 4"/><text x="${W}" y="${y7-4}" text-anchor="end" font-size="11" fill="var(--mut)">70%</text><polyline points="${p.map(q=>q.join(",")).join(" ")}" fill="none" stroke="var(--ac)" stroke-width="3" stroke-linejoin="round"/>${p.map((q,i)=>`<circle cx="${q[0]}" cy="${q[1]}" r="4.5" fill="var(--ac)"><title>${br(ds[i])}: ${pct(m[ds[i]].a,m[ds[i]].n)}%</title></circle>`).join("")}<text x="10" y="${H+24}" font-size="11" fill="var(--mut)">${br(ds[0])}</text><text x="${W-10}" y="${H+24}" text-anchor="end" font-size="11" fill="var(--mut)">${br(ds[ds.length-1])}</text></svg>`}
+function vD(){
+ const r=rng(dper,today),L=st.logs.filter(l=>inR(l.d,r)),Q=st.qs.filter(q=>inR(q.d,r));
+ const mt=L.reduce((a,l)=>a+l.m,0),nq=Q.reduce((a,q)=>a+q.n,0),na=Q.reduce((a,q)=>a+q.a,0);
+ const bd={};L.forEach(l=>bd[l.d]=(bd[l.d]||0)+l.m);const dias=Object.keys(bd).length,bate=Object.values(bd).filter(m=>m>=META).length;
+ const bs=S.map(()=>0),bt={};L.forEach(l=>{bs[l.s]+=l.m;bt[l.t]=(bt[l.t]||0)+l.m});
+ const wr=rng("semana",today),ws=S.map(()=>0);st.logs.filter(l=>inR(l.d,wr)).forEach(l=>ws[l.s]+=l.m);
+ const qa=S.map(()=>({n:0,a:0}));Q.forEach(q=>{qa[q.s].n+=q.n;qa[q.s].a+=q.a});
+ const kp=[["⏱","Horas estudadas",fm(mt)],["✅","Questões resolvidas",nq],["🎯","Taxa de acerto",nq?pct(na,nq)+"%":"–"],["📅","Dias estudados",dias],["📈","Média por dia estudado",dias?fm(Math.round(mt/dias)):"–"],["🔥","Dias com meta de 3h",bate+" de "+dias]];
+ const rank=qa.map((o,i)=>[i,o]).filter(x=>x[1].n).sort((x,y)=>pct(x[1].a,x[1].n)-pct(y[1].a,y[1].n));
+ return`${segs(dper,"dper")}<div class="kp">${kp.map(k=>`<div class="k"><div class="ic">${k[0]}</div><b>${k[2]}</b><small>${k[1]}</small></div>`).join("")}</div>
+ <div class="g2"><div class="card"><h2>Horas por matéria</h2>${donut(S.map((s,i)=>({l:s[0],v:bs[i],c:PAL[i]})).filter(x=>x.v).sort((a,b)=>b.v-a.v),fm(mt))}</div>
+ <div class="card"><h2>Horas por tipo de estudo</h2>${donut(Object.keys(bt).map(t=>({l:t,v:bt[t],c:TYPES[t]||"#ccc"})).sort((a,b)=>b.v-a.v),fm(mt))}</div></div>
+ <div class="card" style="margin-top:14px"><h2>Horas por dia · últimos 14 dias</h2>${dayBars()}<p class="mut">Verde: dia que bateu a meta de 3h.</p></div>
+ <div class="g2"><div class="card"><h2>Meta semanal × estudado</h2><p class="mut">${br(wr[0])} a ${br(wr[1])} · plano de 21h por semana</p>${S.map((s,i)=>PLAN[i]?`<div class="leg"><span><i class="dot" style="background:${PAL[i]}"></i>${esc(s[0])}</span><b>${fm(ws[i])} / ${fm(PLAN[i])}</b></div><div class="bar"><i style="width:${Math.min(100,pct(ws[i],PLAN[i]))}%;background:${PAL[i]}"></i></div>`:"").join("")}</div>
+ <div class="card"><h2>Taxa de acerto por matéria</h2>${rank.map(([i,o])=>{const p=pct(o.a,o.n);return`<div class="leg"><span>${esc(S[i][0])}</span><b class="${p>=70?"ok":p<50?"bad":""}">${p}% <span class="mut">(${o.a}/${o.n})</span></b></div><div class="bar"><i style="width:${p}%;background:${p>=70?"var(--ok)":p<50?"var(--bad)":"#f59e0b"}"></i></div>`}).join("")||'<p class="mut">Sem questões no período.</p>'}</div></div>
+ <div class="card" style="margin-top:14px"><h2>Evolução da taxa de acerto</h2>${accLine()}</div>`}
+function render(){
+ $("#sub").textContent=new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long"});
+ $("#nav").innerHTML=[["desemp","📊 Desempenho"],["horas","⏱ Horas"],["questoes","✅ Questões"],["edital","📋 Edital"],["cron","🗓 Cronograma"]].map(t=>`<button class="${tab===t[0]?"on":""}" data-tab="${t[0]}">${t[1]}</button>`).join("");
+ $("#app").innerHTML={desemp:vD,horas:vHoras,questoes:vQ,edital:vEdital,cron:vCron}[tab]()}
+const g=id=>$("#"+id);
+document.addEventListener("toggle",e=>{const i=e.target.dataset&&e.target.dataset.i;if(i!==undefined&&i!=="")e.target.open?open.add(+i):open.delete(+i)},true);
+document.addEventListener("change",e=>{
+ if(e.target.id==="dd"&&e.target.value){day=e.target.value;render()}
+ else if(e.target.dataset.a==="chk"){const k=e.target.dataset.v;e.target.checked?st.done[k]=1:delete st.done[k];save();const sc=scrollY;render();scrollTo(0,sc)}
+ else if(e.target.id==="hs"||e.target.id==="qs")ls=+e.target.value;
+ else if(e.target.id==="ht")lt=e.target.value});
+document.addEventListener("click",e=>{
+ const b=e.target.closest("button");if(!b)return;
+ if(b.dataset.tab){tab=b.dataset.tab;render();return}
+ const a=b.dataset.a,v=b.dataset.v;if(!a)return;
+ if(a==="dm")day=addD(day,-1);else if(a==="dp")day=addD(day,1);
+ else if(a==="per")per=v;else if(a==="qper")qper=v;else if(a==="dper")dper=v;
+ else if(a==="wm")wk=Math.max(1,wk-1);else if(a==="wp")wk=Math.min(12,wk+1);
+ else if(a==="addl"){const m=(+g("hh").value||0)*60+(+g("hm").value||0);if(m<=0)return;
+  st.logs.push({id:Date.now(),d:day,s:+g("hs").value,t:g("ht").value,m});save()}
+ else if(a==="dell"){st.logs=st.logs.filter(l=>l.id!=v);save()}
+ else if(a==="addq"){const n=+g("qn").value||0,ac=+g("qa").value||0;if(n<=0||ac<0||ac>n){alert("Confira os números: acertos não podem passar de questões feitas.");return}
+  day=g("qd").value||day;st.qs.push({id:Date.now(),d:day,s:+g("qs").value,c:g("qc").value.trim(),n,a:ac,o:g("qo").value.trim()});save()}
+ else if(a==="delq"){st.qs=st.qs.filter(q=>q.id!=v);save()}
+ else if(a==="exp"){g("bk").value=JSON.stringify(st)}
+ else if(a==="imp"){try{const o=JSON.parse(g("bk").value);if(!o||!Array.isArray(o.logs)||!Array.isArray(o.qs))throw 0;st=Object.assign({done:{},logs:[],qs:[]},o);save();alert("Dados restaurados.")}catch(x){alert("Backup inválido.");return}}
+ render()});
+(function(){const f=$("#fx");for(let i=0;i<18;i++){const e=document.createElement("i"),k=true,s=k?12+Math.random()*20:8+Math.random()*16;
+e.className=k?"h":"d";if(k)e.textContent="♥";
+e.style.cssText=`left:${Math.random()*100}%;font-size:${s}px;${k?"":`width:${s}px;height:${s}px;`}animation-duration:${16+Math.random()*18}s;animation-delay:-${Math.random()*30}s`;f.appendChild(e)}})();
+render();load();
+</script></body></html>
+"""
+
+if __name__ == "__main__":
+    init()
+    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    url = f"http://127.0.0.1:{PORT}"
+    print(f"Estudos Bacen rodando em {url}\nBanco de dados: {DB}\nCtrl+C para encerrar.")
+    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\nEncerrado.")
