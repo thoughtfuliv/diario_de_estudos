@@ -82,6 +82,24 @@ main{position:relative;z-index:1}
 .pg .ink.on{pointer-events:auto}
 #vw[data-tool="n"] .ink{touch-action:pan-x pan-y pinch-zoom;cursor:default}
 #vw:not([data-tool="n"]) .ink{touch-action:none}
+
+.textLayer{position:absolute;inset:0;overflow:hidden;line-height:1;pointer-events:none;user-select:none;-webkit-user-select:none}
+.textLayer span,.textLayer br{color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
+.textLayer ::selection{background:rgba(59,130,246,.35)}
+#vw[data-tool="t"] .textLayer{pointer-events:auto;user-select:text;-webkit-user-select:text}
+#vw[data-tool="t"] .ink.on{pointer-events:none}
+.vt button{user-select:none;-webkit-user-select:none}
+.mr{flex-wrap:wrap}.mi{flex:1 1 180px;min-width:0}
+.ma{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.ma button,.ma select{padding:7px 11px}.ma select{max-width:150px}
+.mr button{color:var(--fg)}.mr button.pri{color:var(--acf)}.mr button[data-a="mdel"]{color:var(--bad)}.mr button:disabled{opacity:.35;cursor:default}
+.gh{cursor:grab;color:var(--mut);font-size:22px;padding:0 6px;user-select:none;-webkit-user-select:none}
+.mr.dro{box-shadow:0 -3px 0 var(--ac)}.mr.dg{opacity:.4}
+summary.dro{background:color-mix(in srgb,var(--ac) 18%,transparent);border-radius:8px}
+#dlg{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.45);display:grid;place-items:center;padding:20px}
+#dlg[hidden]{display:none}
+.dbox{background:var(--card);border:1px solid var(--bd);border-radius:18px;padding:20px;max-width:380px;width:100%;box-shadow:var(--sh)}
+.dbox p{margin:0 0 16px;font-size:16px}.dbox .row{justify-content:flex-end}
 </style></head><body><div class="fx" id="fx" aria-hidden="true"></div><main>
 <div class="hd"><h1>👩🏻‍💻 Diário de Estudos · Bacen</h1><p id="sub"></p><button id="out" data-a="out" hidden style="margin-top:10px;background:rgba(255,255,255,.2);color:#fff;border:0">Sair</button></div>
 <div id="lg" class="card" hidden><h2>Entrar</h2><div class="row"><label class="f">E-mail<input id="em" type="email" autocomplete="username"></label><label class="f">Senha<input id="pw" type="password" autocomplete="current-password"></label></div>
@@ -98,6 +116,7 @@ main{position:relative;z-index:1}
 <span class="mut">Pág.</span><input id="vpg" type="number" min="1" value="1"><span id="vpt" class="mut"></span>
 <label><input id="vfg" type="checkbox">dedo desenha</label></div>
 <div id="vs"><div id="vp"></div></div></div>
+<div id="dlg" hidden><div class="dbox"><p id="dtx"></p><div class="row"><button data-d="0">Cancelar</button><button data-d="1" id="dok" style="background:var(--bad);border-color:var(--bad);color:#fff;font-weight:600">Excluir</button></div></div></div>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
@@ -256,6 +275,7 @@ document.addEventListener("toggle",e=>{const i=e.target.dataset&&e.target.datase
 document.addEventListener("change",async e=>{
  if(e.target.id==="dd"&&e.target.value){day=e.target.value;render()}
  else if(e.target.dataset.a==="chk"){const k=e.target.dataset.v,on=e.target.checked;if(await dbTopic(k,on))on?st.done[k]=1:delete st.done[k];const sc=scrollY;render();scrollTo(0,sc)}
+ else if(e.target.dataset.mv!==undefined){if(e.target.value!==""){await place(e.target.dataset.mv,+e.target.value,null);render()}}
  else if(e.target.id==="hs"||e.target.id==="qs"||e.target.id==="ms")ls=+e.target.value;
  else if(e.target.id==="ht")lt=e.target.value});
 document.addEventListener("click",async e=>{
@@ -275,7 +295,8 @@ document.addEventListener("click",async e=>{
  else if(a==="delq"){if(await dbDel("questoes",v))st.qs=st.qs.filter(q=>q.id!=v)}
  else if(a==="mup"){await upMats()}
  else if(a==="mopen"){openViewer(+v);return}
- else if(a==="mdel"){const m=MT.find(x=>x.id==v);if(!m||!confirm('Excluir "'+m.n+'" e todas as anotações dele?'))return;
+ else if(a==="mmu"||a==="mmd"){await moveBy(+v,a==="mmu"?-1:1)}
+ else if(a==="mdel"){const m=MT.find(x=>x.id==v);if(!m||!(await ask('Excluir "'+m.n+'"? As anotações feitas nele também serão apagadas e isso não pode ser desfeito.')))return;
   const{error}=await sb.storage.from("materiais").remove([m.p]);if(error){fail(error);return}
   if(await dbDel("materiais",v))MT=MT.filter(x=>x.id!=v)}
  else if(a==="exp"){g("bk").value=JSON.stringify(st)}
@@ -294,15 +315,40 @@ if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudfl
 let MT=[],MTerr="";const openM=new Set();
 const mb=b=>b>=1048576?(b/1048576).toFixed(1)+" MB":Math.max(1,Math.round(b/1024))+" KB";
 async function loadMats(){
- try{const r=await all("materiais","id");MT=r.map(x=>({id:x.id,s:x.materia,n:x.nome,p:x.caminho,z:x.tamanho||0,d:x.criado_em}));MTerr=""}
+ try{const r=await all("materiais","id");MT=r.map(x=>({id:x.id,s:x.materia,n:x.nome,p:x.caminho,z:x.tamanho||0,d:x.criado_em,o:x.ordem??x.id}));MTerr=""}
  catch(e){MTerr=(e&&e.message)||String(e)}
  if(tab==="mat")render()}
+const mats=s=>MT.filter(m=>m.s===s).sort((a,b)=>a.o-b.o||a.id-b.id);
 function vMat(){
  if(MTerr)return`<div class="card"><h2>Materiais</h2><p class="mut">Para usar esta aba, rode o arquivo <b>supabase-materiais.sql</b> no SQL Editor do Supabase e recarregue a página.</p><p class="mut">${esc(MTerr)}</p></div>`;
- const by=S.map(()=>[]);MT.forEach(m=>by[m.s]&&by[m.s].push(m));
  return`<div class="card"><h2>Enviar PDFs</h2><div class="row" style="align-items:end"><label class="f">Matéria<select id="ms">${opts(S.map(s=>s[0]),ls)}</select></label><label class="f">Arquivos PDF<input id="mf" type="file" accept="application/pdf,.pdf" multiple></label><button class="pri" data-a="mup">Enviar</button></div>
  <p id="mmsg" class="mut">Abra o PDF e escreva direto na página com a caneta do tablet. As anotações ficam salvas por página.</p></div>
- <div class="card"><h2>Meus materiais · ${MT.length} arquivo${MT.length===1?"":"s"}</h2>${S.map((s,i)=>`<details data-m="${i}" ${openM.has(i)?"open":""}><summary>${esc(s[0])} <span class="mut">${by[i].length} PDF${by[i].length===1?"":"s"}</span></summary>${by[i].map(m=>`<div class="li"><span><b>${esc(m.n)}</b><br><span class="mut">${br(iso(new Date(m.d)))} · ${mb(m.z)}</span></span><span style="display:flex;gap:6px"><button class="pri" data-a="mopen" data-v="${m.id}" style="color:var(--acf);padding:7px 14px">Abrir</button><button data-a="mdel" data-v="${m.id}" style="padding:7px 12px">✕</button></span></div>`).join("")||'<p class="mut">Nenhum PDF nesta matéria.</p>'}</details>`).join("")}</div>`}
+ <div class="card"><h2>Meus materiais · ${MT.length} arquivo${MT.length===1?"":"s"}</h2><p class="mut">Arraste pelo ⠿ para reordenar ou mover para outra matéria (solte sobre o nome da matéria). No tablet, use ▲ ▼ e o seletor “Mover para…”.</p>${S.map((s,i)=>{const L=mats(i);return`<details data-m="${i}" ${openM.has(i)?"open":""}><summary data-ms="${i}">${esc(s[0])} <span class="mut">${L.length} PDF${L.length===1?"":"s"}</span></summary>${L.map((m,j)=>`<div class="li mr" draggable="true" data-mid="${m.id}"><span class="gh" title="Arraste para reordenar">⠿</span><span class="mi"><b>${esc(m.n)}</b><br><span class="mut">${br(iso(new Date(m.d)))} · ${mb(m.z)}</span></span><span class="ma"><button data-a="mmu" data-v="${m.id}" ${j?"":"disabled"} title="Subir">▲</button><button data-a="mmd" data-v="${m.id}" ${j<L.length-1?"":"disabled"} title="Descer">▼</button><select data-mv="${m.id}" title="Mover para outra matéria"><option value="">Mover para…</option>${S.map((x,k)=>k===i?"":`<option value="${k}">${esc(x[0])}</option>`).join("")}</select><button class="pri" data-a="mopen" data-v="${m.id}">Abrir</button><button data-a="mdel" data-v="${m.id}" title="Excluir">✕</button></span></div>`).join("")||'<p class="mut">Nenhum PDF nesta matéria.</p>'}</details>`}).join("")}</div>`}
+/* ---- janela de confirmação própria ---- */
+function ask(t,ok){return new Promise(r=>{const d=g("dlg");g("dtx").textContent=t;g("dok").textContent=ok||"Excluir";d.hidden=false;
+ const f=e=>{const b=e.target.closest("button[data-d]");if(!b&&e.target!==d)return;d.hidden=true;d.removeEventListener("click",f);r(!!b&&b.dataset.d==="1")};d.addEventListener("click",f)})}
+/* ---- reordenar / mover entre matérias ---- */
+async function place(id,toS,beforeId){
+ const m=MT.find(x=>x.id==id);if(!m)return;const fromS=m.s,old={};MT.forEach(x=>old[x.id]=[x.s,x.o]);
+ const tgt=mats(toS).filter(x=>x.id!==m.id);let idx=beforeId==null?tgt.length:tgt.findIndex(x=>x.id==beforeId);if(idx<0)idx=tgt.length;
+ tgt.splice(idx,0,m);m.s=toS;tgt.forEach((x,i)=>x.o=i);if(fromS!==toS)mats(fromS).forEach((x,i)=>x.o=i);
+ if(fromS!==toS)openM.add(toS);
+ const diff=MT.filter(x=>old[x.id][0]!==x.s||old[x.id][1]!==x.o);if(!diff.length)return;
+ const rs=await Promise.all(diff.map(x=>sb.from("materiais").update({materia:x.s,ordem:x.o}).eq("id",x.id)));
+ const er=rs.find(r=>r.error);if(er){fail(er.error);await loadMats()}}
+async function moveBy(id,d){
+ const m=MT.find(x=>x.id==id);if(!m)return;const l=mats(m.s),i=l.findIndex(x=>x.id==id),j=i+d;if(j<0||j>=l.length)return;
+ await place(id,m.s,d<0?l[j].id:(l[j+1]?l[j+1].id:null))}
+let dragId=null;
+const dTarget=e=>e.target.closest&&e.target.closest("[data-mid],summary[data-ms]");
+document.addEventListener("dragstart",e=>{const r=e.target.closest&&e.target.closest("[data-mid]");if(!r)return;dragId=r.dataset.mid;e.dataTransfer.setData("text/plain",dragId);e.dataTransfer.effectAllowed="move";setTimeout(()=>r.classList.add("dg"),0)});
+document.addEventListener("dragend",()=>{dragId=null;document.querySelectorAll(".dro,.dg").forEach(x=>x.classList.remove("dro","dg"))});
+document.addEventListener("dragover",e=>{if(!dragId)return;const t=dTarget(e);if(!t)return;e.preventDefault();document.querySelectorAll(".dro").forEach(x=>{if(x!==t)x.classList.remove("dro")});t.classList.add("dro")});
+document.addEventListener("drop",async e=>{
+ if(!dragId)return;const t=dTarget(e);if(!t)return;e.preventDefault();const id=dragId;dragId=null;
+ if(t.dataset.mid){if(t.dataset.mid!==id){const tm=MT.find(x=>x.id==t.dataset.mid);if(tm)await place(id,tm.s,tm.id)}}
+ else await place(id,+t.dataset.ms,null);
+ render()});
 async function upMats(){
  const fs=[...g("mf").files],s=+g("ms").value,msg=g("mmsg");ls=s;
  if(!fs.length){alert("Escolha um ou mais PDFs.");return}
@@ -314,19 +360,20 @@ async function upMats(){
   const path=uid+"/"+s+"/"+Date.now()+"-"+safe;
   const{error}=await sb.storage.from("materiais").upload(path,f,{contentType:"application/pdf",upsert:false});
   if(error){fail(error);continue}
-  const w=await dbIns("materiais",{materia:s,nome:f.name.replace(/\.pdf$/i,""),caminho:path,tamanho:f.size});
+  const L0=mats(s),w=await dbIns("materiais",{materia:s,nome:f.name.replace(/\.pdf$/i,""),caminho:path,tamanho:f.size,ordem:L0.length?Math.max(...L0.map(x=>x.o))+1:0});
   if(!w){await sb.storage.from("materiais").remove([path]);continue}
-  MT.push({id:w.id,s:w.materia,n:w.nome,p:w.caminho,z:w.tamanho||0,d:w.criado_em});openM.add(s)}}
+  MT.push({id:w.id,s:w.materia,n:w.nome,p:w.caminho,z:w.tamanho||0,d:w.criado_em,o:w.ordem||0});openM.add(s)}}
 
 /* ---- leitor ---- */
 const VW={m:null,doc:null,P:[null],N:0,z:1,tool:"p",cp:"#1d1d1f",ch:"#fde047",sz:3,fg:false,cur:null,pan:null,U:[],D:new Set(),t:0,io:null,ra:0,raf:0};
-const COR_P=["#1d1d1f","#c93a3a","#1d4ed8","#2f9e6e","#7b5ea7","#e08a00"],COR_H=["#fde047","#f9a8d4","#86efac","#7dd3fc","#fdba74"];
+const COR_P=["#1d1d1f","#c93a3a","#ff2d95","#f472b6","#1d4ed8","#2f9e6e","#7b5ea7","#e08a00"],COR_H=["#fde047","#f9a8d4","#ff7ac6","#86efac","#7dd3fc","#fdba74"];
 const setSt=t=>{g("vst").textContent=t};
 function bar(){
- const T=[["n","✋","Navegar (rolar e dar zoom com os dedos)"],["p","✏️","Caneta"],["h","🖍","Marca-texto"],["e","🧽","Borracha"]];
- const cs=VW.tool==="h"?COR_H:COR_P,cur=VW.tool==="h"?VW.ch:VW.cp;
+ const T=[["n","✋","Navegar (rolar e dar zoom com os dedos)"],["p","✏️","Caneta"],["h","🖍","Marca-texto livre"],["t","🔤","Marcar texto selecionado"],["e","🧽","Borracha"]];
+ const hl=VW.tool==="h"||VW.tool==="t",cs=hl?COR_H:COR_P,cur=hl?VW.ch:VW.cp;
  g("vb").innerHTML=T.map(t=>`<button data-w="tool" data-v="${t[0]}" title="${t[2]}" class="${VW.tool===t[0]?"on":""}">${t[1]}</button>`).join("")+
-  (VW.tool==="p"||VW.tool==="h"?cs.map(c=>`<button class="sw ${c===cur?"on":""}" data-w="col" data-v="${c}" style="background:${c}" aria-label="Cor"></button>`).join(""):"")}
+  (VW.tool==="p"||hl?cs.map(c=>`<button class="sw ${c===cur?"on":""}" data-w="col" data-v="${c}" style="background:${c}" aria-label="Cor"></button>`).join(""):"")+
+  (VW.tool==="t"?'<button data-w="mark" class="on" title="Aplica a cor ao trecho selecionado">Marcar seleção</button>':"")}
 function layout(){
  const vs=g("vs"),base=Math.max(200,Math.min(vs.clientWidth-16,1000))*VW.z;
  for(let n=1;n<=VW.N;n++){const P=VW.P[n];P.w=base;P.h=base*P.vh/P.vw;P.el.style.width=P.w+"px";P.el.style.height=P.h+"px"}
@@ -334,7 +381,7 @@ function layout(){
 function setZoom(z){
  const vs=g("vs"),r=vs.scrollTop/(vs.scrollHeight||1);VW.z=Math.min(3,Math.max(.5,z));layout();vs.scrollTop=r*vs.scrollHeight;
  for(let n=1;n<=VW.N;n++){const P=VW.P[n];if(P.vis)renderPage(n);else if(P.ok)release(n)}}
-function release(n){const P=VW.P[n];if(P.busy||!P.ok)return;for(const c of[P.c,P.hl,P.ink]){c.width=1;c.height=1}P.ok=false;P.ink.classList.remove("on")}
+function release(n){const P=VW.P[n];if(P.busy||!P.ok)return;for(const c of[P.c,P.hl,P.ink]){c.width=1;c.height=1}P.ok=false;P.tl.innerHTML="";P.ink.classList.remove("on")}
 async function renderPage(n){
  const P=VW.P[n],doc=VW.doc;if(P.busy)return;P.busy=true;
  try{while(P.vis){
@@ -344,11 +391,15 @@ async function renderPage(n){
   await page.render({canvasContext:P.c.getContext("2d"),viewport:vp}).promise;
   if(doc!==VW.doc)return;
   P.ok=true;P.ink.width=P.hl.width=P.c.width;P.ink.height=P.hl.height=P.c.height;P.ink.classList.add("on");drawPage(n);
+  try{P.tl.innerHTML="";const ts=w/P.vw;P.tl.style.setProperty("--scale-factor",ts);const tc=await page.getTextContent();if(doc!==VW.doc)return;
+   await pdfjsLib.renderTextLayer({textContentSource:tc,container:P.tl,viewport:page.getViewport({scale:ts}),textDivs:[]}).promise}catch(e){console.warn("texto",e)}
+  
   if(P.w===w)break}}
  catch(e){if(!(e&&e.name==="RenderingCancelledException"))console.error(e)}
  finally{P.busy=false}
  if(!P.vis&&P.ok&&doc===VW.doc)release(n)}
 function strokePath(ctx,s,k){
+ if(s.t==="r"){ctx.fillStyle=s.c;for(const a of s.r)ctx.fillRect(a[0]*k,a[1]*k,a[2]*k,a[3]*k);return}
  const p=s.p;ctx.lineCap=ctx.lineJoin="round";ctx.strokeStyle=ctx.fillStyle=s.c;ctx.lineWidth=s.w*k;
  if(p.length===1){ctx.beginPath();ctx.arc(p[0][0]*k,p[0][1]*k,ctx.lineWidth/2,0,7);ctx.fill();return}
  ctx.beginPath();ctx.moveTo(p[0][0]*k,p[0][1]*k);
@@ -357,15 +408,15 @@ function strokePath(ctx,s,k){
 function drawPage(n){
  const P=VW.P[n];if(!P||!P.ok)return;const k=P.ink.width,a=P.ink.getContext("2d"),b=P.hl.getContext("2d");
  a.clearRect(0,0,P.ink.width,P.ink.height);b.clearRect(0,0,P.hl.width,P.hl.height);
- for(const s of P.S)strokePath(s.t==="h"?b:a,s,k)}
+ for(const s of P.S)strokePath(s.t==="h"||s.t==="r"?b:a,s,k)}
 function drawSeg(P,s,a,b){
  const k=P.ink.width,ctx=(s.t==="h"?P.hl:P.ink).getContext("2d");
  ctx.lineCap=ctx.lineJoin="round";ctx.strokeStyle=s.c;ctx.lineWidth=s.w*k;ctx.beginPath();ctx.moveTo(a[0]*k,a[1]*k);ctx.lineTo(b[0]*k,b[1]*k);ctx.stroke()}
 function dseg(q,a,b){const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy;let t=l?((q[0]-a[0])*dx+(q[1]-a[1])*dy)/l:0;t=Math.max(0,Math.min(1,t));return Math.hypot(q[0]-a[0]-t*dx,q[1]-a[1]-t*dy)}
-function hit(s,q,r){const p=s.p;if(p.length===1)return Math.hypot(p[0][0]-q[0],p[0][1]-q[1])<r;for(let i=1;i<p.length;i++)if(dseg(q,p[i-1],p[i])<r)return true;return false}
+function hit(s,q,r){if(s.t==="r")return s.r.some(a=>q[0]>=a[0]-r&&q[0]<=a[0]+a[2]+r&&q[1]>=a[1]-r&&q[1]<=a[1]+a[3]+r);const p=s.p;if(p.length===1)return Math.hypot(p[0][0]-q[0],p[0][1]-q[1])<r;for(let i=1;i<p.length;i++)if(dseg(q,p[i-1],p[i])<r)return true;return false}
 function erase(C,q){
  const P=VW.P[C.n],r=12/P.w,keep=[],gone=[];
- for(const s of P.S)(hit(s,q,r+s.w/2)?gone:keep).push(s);
+ for(const s of P.S)(hit(s,q,r+(s.w||0)/2)?gone:keep).push(s);
  if(gone.length){P.S=keep;C.del.push(...gone);drawPage(C.n);dirty(C.n)}}
 const pos=(e,r)=>[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.width];
 function beginStroke(e,c){
@@ -378,6 +429,14 @@ function endStroke(e){
  const C=VW.cur;if(!C||e.pointerId!==C.id)return;VW.cur=null;const P=VW.P[C.n];
  if(C.s){C.s.p=C.s.p.map(q=>[+q[0].toFixed(4),+q[1].toFixed(4)]);P.S.push(C.s);VW.U.push({k:"a",n:C.n,s:C.s});drawPage(C.n);dirty(C.n)}
  else if(C.del.length)VW.U.push({k:"d",n:C.n,list:C.del})}
+function markSel(){
+ const sel=window.getSelection();if(!sel||sel.isCollapsed||!sel.rangeCount)return false;
+ const rs=[...sel.getRangeAt(0).getClientRects()];let any=false;
+ for(let n=1;n<=VW.N;n++){const P=VW.P[n];if(!P.ok)continue;const b=P.el.getBoundingClientRect(),rr=[];
+  for(const r of rs){if(r.width<1||r.height<1||r.height>b.width*.12)continue;const cx=r.left+r.width/2,cy=r.top+r.height/2;if(cx<b.left||cx>b.right||cy<b.top||cy>b.bottom)continue;
+   rr.push([+((r.left-b.left)/b.width).toFixed(4),+((r.top-b.top)/b.width).toFixed(4),+(r.width/b.width).toFixed(4),+(r.height/b.width).toFixed(4)])}
+  if(rr.length){const st2={t:"r",c:VW.ch,r:rr};P.S.push(st2);VW.U.push({k:"a",n,s:st2});drawPage(n);dirty(n);any=true}}
+ sel.removeAllRanges();return any}
 function undo(){
  const u=VW.U.pop();if(!u)return;const P=VW.P[u.n];
  if(u.k==="a"){const i=P.S.indexOf(u.s);if(i>=0)P.S.splice(i,1)}else P.S.push(...u.list);
@@ -405,8 +464,8 @@ async function openViewer(id){
   const fr=document.createDocumentFragment();
   for(let n=1;n<=VW.N;n++){
    const v=(await doc.getPage(n)).getViewport({scale:1}),el=document.createElement("div");
-   el.className="pg";el.dataset.n=n;el.innerHTML='<canvas class="pdf"></canvas><canvas class="hl"></canvas><canvas class="ink" data-n="'+n+'"></canvas>';
-   VW.P.push({n,el,c:el.children[0],hl:el.children[1],ink:el.children[2],vw:v.width,vh:v.height,S:ann[n]||[],ok:false,busy:false,vis:false,w:0,h:0});fr.appendChild(el)}
+   el.className="pg";el.dataset.n=n;el.innerHTML='<canvas class="pdf"></canvas><canvas class="hl"></canvas><canvas class="ink" data-n="'+n+'"></canvas><div class="textLayer"></div>';
+   VW.P.push({n,el,c:el.children[0],hl:el.children[1],ink:el.children[2],tl:el.children[3],vw:v.width,vh:v.height,S:ann[n]||[],ok:false,busy:false,vis:false,w:0,h:0});fr.appendChild(el)}
   g("vp").appendChild(fr);layout();
   if(VW.io)VW.io.disconnect();
   VW.io=new IntersectionObserver(es=>es.forEach(en=>{const n=+en.target.dataset.n,P=VW.P[n];if(!P)return;P.vis=en.isIntersecting;if(P.vis)renderPage(n);else release(n)}),{root:g("vs"),rootMargin:"900px 0px"});
@@ -415,7 +474,7 @@ async function openViewer(id){
  catch(e){fail(e);vw.hidden=true;VW.m=null}}
 async function closeViewer(){
  await flush();
- if(VW.D.size&&!confirm("Algumas anotações ainda não foram salvas. Sair mesmo assim?"))return;
+ if(VW.D.size&&!(await ask("Algumas anotações ainda não foram salvas. Sair mesmo assim?","Sair")))return;
  clearTimeout(VW.t);if(VW.io)VW.io.disconnect();try{VW.doc&&VW.doc.destroy()}catch(e){}
  VW.m=null;VW.doc=null;VW.P=[null];VW.N=0;g("vp").innerHTML="";g("vw").hidden=true}
 (function(){
@@ -424,7 +483,8 @@ async function closeViewer(){
   const b=e.target.closest("button");if(!b||!b.dataset.w)return;const w=b.dataset.w,v=b.dataset.v;
   if(w==="x")await closeViewer();
   else if(w==="tool"){VW.tool=v;vw.dataset.tool=v;bar()}
-  else if(w==="col"){if(VW.tool==="h")VW.ch=v;else VW.cp=v;bar()}
+  else if(w==="col"){if(VW.tool==="h"||VW.tool==="t")VW.ch=v;else VW.cp=v;bar()}
+  else if(w==="mark"){if(!markSel())setSt("Selecione um trecho de texto primeiro")}
   else if(w==="undo")undo();
   else if(w==="z+")setZoom(VW.z+.25);else if(w==="z-")setZoom(VW.z-.25);else if(w==="z0")setZoom(1)});
  g("vz").addEventListener("input",e=>{VW.sz=+e.target.value});
@@ -434,7 +494,7 @@ async function closeViewer(){
   const mid=vs.scrollTop+vs.clientHeight/3;let c=1;for(let n=1;n<=VW.N;n++){if(VW.P[n].el.offsetTop<=mid)c=n;else break}
   const i=g("vpg");if(document.activeElement!==i)i.value=c})});
  vs.addEventListener("pointerdown",e=>{
-  const c=e.target.closest&&e.target.closest("canvas.ink");if(!c||VW.tool==="n"||VW.cur)return;
+  const c=e.target.closest&&e.target.closest("canvas.ink");if(!c||VW.tool==="n"||VW.tool==="t"||VW.cur)return;
   if(e.pointerType==="touch"&&!VW.fg){VW.pan={id:e.pointerId,x:e.clientX,y:e.clientY,t:e.timeStamp,vx:0,vy:0};cancelAnimationFrame(VW.raf);c.setPointerCapture(e.pointerId);return}
   if(e.pointerType==="mouse"&&e.button!==0)return;
   e.preventDefault();beginStroke(e,c)});
@@ -449,11 +509,13 @@ async function closeViewer(){
   if(A&&e.pointerId===A.id){const dx=e.clientX-A.x,dy=e.clientY-A.y,dt=Math.max(1,e.timeStamp-A.t);
    A.vx=dx/dt;A.vy=dy/dt;vs.scrollLeft-=dx;vs.scrollTop-=dy;A.x=e.clientX;A.y=e.clientY;A.t=e.timeStamp}});
  const up=e=>{
+  if(VW.tool==="t"&&e.pointerType==="mouse")setTimeout(markSel,0);
   endStroke(e);
   const A=VW.pan;if(A&&e.pointerId===A.id){VW.pan=null;
    let vx=e.timeStamp-A.t>80?0:A.vx*16,vy=e.timeStamp-A.t>80?0:A.vy*16;
    const step=()=>{vs.scrollTop-=vy;vs.scrollLeft-=vx;vx*=.95;vy*=.95;if(Math.hypot(vx,vy)>.5)VW.raf=requestAnimationFrame(step)};
    if(Math.hypot(vx,vy)>.5)VW.raf=requestAnimationFrame(step)}};
+ vw.addEventListener("mousedown",e=>{if(e.target.closest(".vt button"))e.preventDefault()});
  vs.addEventListener("pointerup",up);vs.addEventListener("pointercancel",up);
 })();
 
